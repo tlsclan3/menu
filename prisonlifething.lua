@@ -1,4 +1,4 @@
---v5 --latest i got my hands on--
+--v6 --improved with bug fixes and optimizations--
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -18,16 +18,17 @@ local isMoving = false
 local MAX_HEIGHT = 120
 local COOLDOWN_DURATION = 5
 local lastTeleportTime = 0
+local PLATFORM_OFFSET = Vector3.new(0, -3.1, 0) -- Platform spawn offset below character
+local KILLBRICK_CHECK_INTERVAL = 0.25 -- Throttle killbrick detection
+local ANTI_VOID_THRESHOLD = -50 -- Y position threshold for anti-void
+local ANTI_VOID_TELEPORT_HEIGHT = 150 -- How much to teleport up
+local SETTINGS_SAVE_DEBOUNCE = 0.5 -- Debounce settings saves
+local lastSettingsSaveTime = 0
 
 -- Teleport keybind
 local tpInputType  = Enum.UserInputType.Keyboard
 local tpKeyCode    = Enum.KeyCode.LeftControl
 local isBindingTP  = false
-
--- Follow TP keybind
-local followInputType = Enum.UserInputType.Keyboard
-local followKeyCode   = Enum.KeyCode.T
-local isBindingFollow = false
 
 local Settings = {
     TeamCheck=false,
@@ -37,6 +38,7 @@ local Settings = {
     ESP      = { Box=false, Corner=false, Name=false, Distance=false, Tracers=false, Skeleton=false, Trails=false, TeamColor=false },
 }
 
+-- Load settings with error handling
 if isfile and readfile then
     pcall(function()
         if isfile("KarbonHub_Settings.json") then
@@ -52,8 +54,25 @@ if isfile and readfile then
     end)
 end
 
+-- Debounced settings save
 local function SaveSettings()
+    local now = os.clock()
+    if now - lastSettingsSaveTime < SETTINGS_SAVE_DEBOUNCE then return end
+    lastSettingsSaveTime = now
     if writefile then pcall(function() writefile("KarbonHub_Settings.json", HttpService:JSONEncode(Settings)) end) end
+end
+
+-- Script cleanup on error
+local cleanup = {}
+local function registerCleanup(conn)
+    if conn and conn.Disconnect then table.insert(cleanup, conn) end
+end
+
+local function cleanupAll()
+    for _, conn in ipairs(cleanup) do
+        pcall(function() conn:Disconnect() end)
+    end
+    cleanup = {}
 end
 
 --------------------------------------------------------------------------------
@@ -71,14 +90,15 @@ local function processBoundary(child)
         rp.Material=Enum.Material.SmoothPlastic; rp.CanCollide=true; rp.Anchored=true; rp.Parent=par
     end
 end
-for _, c in Workspace:GetChildren() do processBoundary(c) end
-Workspace.ChildAdded:Connect(processBoundary)
 
--- Killbrick check throttled to 0.25s intervals (was every Stepped frame = massive lag)
+for _, c in Workspace:GetChildren() do processBoundary(c) end
+registerCleanup(Workspace.ChildAdded:Connect(processBoundary))
+
+-- Killbrick check throttled to 0.25s intervals
 local killTimer = 0
-RunService.Heartbeat:Connect(function(dt)
+registerCleanup(RunService.Heartbeat:Connect(function(dt)
     killTimer += dt
-    if killTimer < 0.25 then return end
+    if killTimer < KILLBRICK_CHECK_INTERVAL then return end
     killTimer = 0
     local char = player.Character
     if not char then return end
@@ -94,7 +114,7 @@ RunService.Heartbeat:Connect(function(dt)
             end
         end
     end
-end)
+end))
 
 --------------------------------------------------------------------------------
 -- KARBON HUB UI LIBRARY
@@ -102,7 +122,7 @@ end)
 local Theme = {
     Background = Color3.fromRGB(15,15,20),
     Panel      = Color3.fromRGB(25,25,35),
-    Accent     = Color3.fromRGB(255,255,255), -- Will use gradient
+    Accent     = Color3.fromRGB(255,255,255),
     Hover      = Color3.fromRGB(40,40,55),
     Text       = Color3.fromRGB(250,250,250),
     TextDim    = Color3.fromRGB(161,161,170),
@@ -148,8 +168,10 @@ function UI:Notify(title, text, dur)
     toast.Position=UDim2.new(1,20,0,0)
     TweenService:Create(toast,TweenInfo.new(0.4,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),{Position=UDim2.new(0,0,0,0)}):Play()
     task.delay(dur, function()
-        local tw=TweenService:Create(toast,TweenInfo.new(0.4,Enum.EasingStyle.Quad,Enum.EasingDirection.In),{Position=UDim2.new(1,20,0,0)})
-        tw:Play(); tw.Completed:Connect(function() toast:Destroy() end)
+        if toast.Parent then
+            local tw=TweenService:Create(toast,TweenInfo.new(0.4,Enum.EasingStyle.Quad,Enum.EasingDirection.In),{Position=UDim2.new(1,20,0,0)})
+            tw:Play(); tw.Completed:Connect(function() if toast.Parent then toast:Destroy() end end)
+        end
     end)
 end
 
@@ -184,12 +206,12 @@ function UI:CreateWindow(titleText)
     TitleBar.InputChanged:Connect(function(i)
         if i.UserInputType==Enum.UserInputType.MouseMovement or i.UserInputType==Enum.UserInputType.Touch then dragInput=i end
     end)
-    UserInputService.InputChanged:Connect(function(i)
+    registerCleanup(UserInputService.InputChanged:Connect(function(i)
         if i==dragInput and dragging then
             local d=i.Position-dragStart
             MainFrame.Position=UDim2.new(startPos.X.Scale,startPos.X.Offset+d.X,startPos.Y.Scale,startPos.Y.Offset+d.Y)
         end
-    end)
+    end))
 
     local RH=Instance.new("TextButton",MainFrame)
     RH.Size=UDim2.new(0,20,0,20); RH.Position=UDim2.new(1,-20,1,-20); RH.BackgroundTransparency=1; RH.Text=""; RH.ZIndex=10
@@ -200,12 +222,12 @@ function UI:CreateWindow(titleText)
             i.Changed:Connect(function() if i.UserInputState==Enum.UserInputState.End then resizing=false end end)
         end
     end)
-    UserInputService.InputChanged:Connect(function(i)
+    registerCleanup(UserInputService.InputChanged:Connect(function(i)
         if resizing and i.UserInputType==Enum.UserInputType.MouseMovement then
             local d=i.Position-resizeStart
             MainFrame.Size=UDim2.new(0,math.max(420,startSize.X+d.X),0,math.max(300,startSize.Y+d.Y))
         end
-    end)
+    end))
 
     local Sidebar=Instance.new("Frame",MainFrame)
     Sidebar.Size=UDim2.new(0,140,1,-40); Sidebar.Position=UDim2.new(0,0,0,40); Sidebar.BackgroundColor3=Theme.Panel; Sidebar.BorderSizePixel=0
@@ -232,7 +254,7 @@ function UI:CreateWindow(titleText)
         ContentScroll.Size=UDim2.new(1,-20,1,-20); ContentScroll.Position=UDim2.new(0,10,0,10)
         ContentScroll.BackgroundTransparency=1; ContentScroll.ScrollBarThickness=4; ContentScroll.ScrollBarImageColor3=Theme.Outline; ContentScroll.Visible=false
         local CL=Instance.new("UIListLayout",ContentScroll); CL.SortOrder=Enum.SortOrder.LayoutOrder; CL.Padding=UDim.new(0,10)
-        CL:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function() ContentScroll.CanvasSize=UDim2.new(0,0,0,CL.AbsoluteContentSize.Y+10) end)
+        registerCleanup(CL:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function() ContentScroll.CanvasSize=UDim2.new(0,0,0,CL.AbsoluteContentSize.Y+10) end))
 
         TabBtn.MouseEnter:Connect(function() if window.CurrentTab~=tab then TweenService:Create(TabBtn,TweenInfo.new(0.15),{BackgroundColor3=Theme.Hover,TextColor3=Theme.Text}):Play() end end)
         TabBtn.MouseLeave:Connect(function() if window.CurrentTab~=tab then TweenService:Create(TabBtn,TweenInfo.new(0.15),{BackgroundColor3=Theme.Background,TextColor3=Theme.TextDim}):Play() end end)
@@ -298,7 +320,6 @@ function UI:CreateWindow(titleText)
             local Handle=Instance.new("Frame",SFill); Handle.Size=UDim2.new(0,14,0,14); Handle.Position=UDim2.new(1,-7,0.5,-7); Handle.BackgroundColor3=Color3.fromRGB(255,255,255)
             Instance.new("UICorner",Handle).CornerRadius=UDim.new(1,0)
             local isDragging=false
-            -- OPTIMIZED: Direct set, no tween per mouse move
             local function update(inp)
                 local pct=math.clamp((inp.Position.X-SBG.AbsolutePosition.X)/SBG.AbsoluteSize.X,0,1)
                 local val=math.floor(smin+(smax-smin)*pct)
@@ -307,7 +328,7 @@ function UI:CreateWindow(titleText)
             local SBtn=Instance.new("TextButton",SBG); SBtn.Size=UDim2.new(1,20,1,20); SBtn.Position=UDim2.new(0,-10,0,-10); SBtn.BackgroundTransparency=1; SBtn.Text=""
             SBtn.InputBegan:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then isDragging=true; update(i) end end)
             SBtn.InputEnded:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then isDragging=false end end)
-            UserInputService.InputChanged:Connect(function(i) if isDragging and (i.UserInputType==Enum.UserInputType.MouseMovement or i.UserInputType==Enum.UserInputType.Touch) then update(i) end end)
+            registerCleanup(UserInputService.InputChanged:Connect(function(i) if isDragging and (i.UserInputType==Enum.UserInputType.MouseMovement or i.UserInputType==Enum.UserInputType.Touch) then update(i) end end))
         end
 
         function tab:AddButton(text, callback)
@@ -428,8 +449,11 @@ local function spawnVisualizer(pos)
     p.Shape = Enum.PartType.Ball; p.Size = Vector3.new(1.5, 1.5, 1.5); p.Color = Color3.fromRGB(255, 105, 180); p.Material = Enum.Material.Neon
     p.Anchored = true; p.CanCollide = false; p.Position = pos; p.Parent = Workspace
     task.delay(0.5, function()
-        for i = 1, 10 do p.Transparency = i / 10; task.wait(0.03) end
-        p:Destroy()
+        for i = 1, 10 do 
+            if p.Parent then p.Transparency = i / 10 end
+            task.wait(0.03) 
+        end
+        if p.Parent then p:Destroy() end
     end)
 end
 
@@ -452,6 +476,7 @@ local function buildWaypoints(startPos, endPos)
 end
 
 local function findGround(pos, character)
+    if not character then return pos.Y end
     local params = RaycastParams.new()
     params.FilterDescendantsInstances = {character}; params.FilterType = Enum.RaycastFilterType.Exclude
     local result = Workspace:Raycast(pos, Vector3.new(0, -2000, 0), params)
@@ -500,14 +525,14 @@ local function moveCharacter(targetPos)
     local hrp = character:FindFirstChild("HumanoidRootPart")
     local humanoid = character:FindFirstChildOfClass("Humanoid")
     if not hrp or not humanoid then return end
+    
     isMoving = true; lastTeleportTime = os.clock()
     hrp.Anchored = true; humanoid.PlatformStand = true; humanoid.AutoRotate = false
     local _, currentYRot = hrp.CFrame:ToEulerAnglesYXZ()
     hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, currentYRot, 0)
-    local PLATFORM_OFFSET = Vector3.new(0, -3.1, 0)
     local platform = spawnPlatform(hrp.Position + PLATFORM_OFFSET)
     local startPos = hrp.Position
-    local peakY = math.min(startPos.Y + MAX_HEIGHT, startPos.Y + MAX_HEIGHT)
+    local peakY = startPos.Y + MAX_HEIGHT
     local waypoints = buildWaypoints(startPos, targetPos)
     local wpIndex = 1
     local RISE_SPEED = 600; local TRAVEL_SPEED = 600; local DESCENT_SPEED = 300
@@ -530,7 +555,7 @@ local function moveCharacter(targetPos)
             local newY = math.min(currentPos.Y + RISE_SPEED * dt, peakY)
             if newY >= peakY then newY = peakY; phase = "travel" end
             root.CFrame = CFrame.new(currentPos.X, newY, currentPos.Z) * CFrame.Angles(0, yr, 0)
-            platform.CFrame = CFrame.new(root.Position + PLATFORM_OFFSET)
+            if platform and platform.Parent then platform.CFrame = CFrame.new(root.Position + PLATFORM_OFFSET) end
             return
         end
         if phase == "travel" then
@@ -549,7 +574,7 @@ local function moveCharacter(targetPos)
                 local newPos = currentPos + diff.Unit * step
                 root.CFrame = CFrame.new(Vector3.new(newPos.X, math.min(newPos.Y, startPos.Y + MAX_HEIGHT), newPos.Z)) * CFrame.Angles(0, yr, 0)
             end
-            platform.CFrame = CFrame.new(root.Position + PLATFORM_OFFSET)
+            if platform and platform.Parent then platform.CFrame = CFrame.new(root.Position + PLATFORM_OFFSET) end
             return
         end
         if phase == "descend" then
@@ -557,16 +582,17 @@ local function moveCharacter(targetPos)
             local targetGroundY = (groundY or targetPos.Y) + 3.1
             if newY <= targetGroundY then
                 root.CFrame = CFrame.new(targetPos.X, targetGroundY, targetPos.Z) * CFrame.Angles(0, yr, 0)
-                platform.CFrame = CFrame.new(root.Position + PLATFORM_OFFSET)
+                if platform and platform.Parent then platform.CFrame = CFrame.new(root.Position + PLATFORM_OFFSET) end
                 connection:Disconnect()
                 task.wait(0.05)
                 local _, fyr = root.CFrame:ToEulerAnglesYXZ()
                 root.CFrame = CFrame.new(root.Position) * CFrame.Angles(0, fyr, 0)
                 hum.PlatformStand = false; hum.AutoRotate = true; root.Anchored = false
-                platform:Destroy(); isMoving = false; return
+                if platform and platform.Parent then platform:Destroy() end
+                isMoving = false; return
             end
             root.CFrame = CFrame.new(targetPos.X, newY, targetPos.Z) * CFrame.Angles(0, yr, 0)
-            platform.CFrame = CFrame.new(root.Position + PLATFORM_OFFSET)
+            if platform and platform.Parent then platform.CFrame = CFrame.new(root.Position + PLATFORM_OFFSET) end
         end
     end)
 end
@@ -599,7 +625,7 @@ end
 --------------------------------------------------------------------------------
 -- KEYBIND INPUT HANDLER
 --------------------------------------------------------------------------------
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
+registerCleanup(UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
 
     if isBindingTP then
@@ -628,7 +654,7 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if isTPKey then
         executeTeleport()
     end
-end)
+end))
 
 --------------------------------------------------------------------------------
 -- AIMBOT & ESP ENGINE
@@ -685,6 +711,9 @@ local function hideAllESP(d)
     for i=1,8 do d.corners[i].Visible=false; d.cornersOut[i].Visible=false end
     for _,l in pairs(d.skelLines) do l.Visible=false end; for _,l in pairs(d.skelOut) do l.Visible=false end
     for _,l in pairs(d.trailLines) do l.Visible=false end; for _,l in pairs(d.trailOut) do l.Visible=false end
+    -- FIXED: Clear arrays to prevent memory leaks
+    d.skelLines = {}; d.skelOut = {}; d.trailLines = {}; d.trailOut = {}
+    d.history = {}
 end
 
 local function removePlayerESP(p)
@@ -697,15 +726,15 @@ local function removePlayerESP(p)
 end
 
 for _,p in Players:GetPlayers() do if p~=player then createPlayerESP(p) end end
-Players.PlayerAdded:Connect(function(p) if p~=player then createPlayerESP(p) end end)
-Players.PlayerRemoving:Connect(removePlayerESP)
+registerCleanup(Players.PlayerAdded:Connect(function(p) if p~=player then createPlayerESP(p) end end))
+registerCleanup(Players.PlayerRemoving:Connect(removePlayerESP))
 
 -- Pre-alloc corner From/To to avoid GC pressure per frame
 local _cFrom={} local _cTo={}
 for i=1,8 do _cFrom[i]=Vector2.new(0,0); _cTo[i]=Vector2.new(0,0) end
 
--- SINGLE unified render loop (was multiple connections)
-RunService.RenderStepped:Connect(function()
+-- SINGLE unified render loop
+registerCleanup(RunService.RenderStepped:Connect(function()
     local camPos=camera.CFrame.Position; local vp=camera.ViewportSize
     local mLoc=UserInputService:GetMouseLocation(); local now=os.clock()
 
@@ -734,15 +763,16 @@ RunService.RenderStepped:Connect(function()
 
     -- Skip ESP entirely if all off
     local espAny=Settings.ESP.Box or Settings.ESP.Corner or Settings.ESP.Name or Settings.ESP.Distance or Settings.ESP.Tracers or Settings.ESP.Skeleton or Settings.ESP.Trails
+    if not espAny then return end
     local halfW=vp.X*0.5; local botY=vp.Y
 
     for p,d in pairs(espCache) do
         local char=p.Character; local hrp=char and char:FindFirstChild("HumanoidRootPart"); local hum=char and char:FindFirstChildOfClass("Humanoid")
-        if not (char and hrp and hum and hum.Health>0 and not (Settings.TeamCheck and p.Team and player.Team and p.Team==player.Team)) or not espAny then
-            hideAllESP(d); d.history={}; continue
+        if not (char and hrp and hum and hum.Health>0 and not (Settings.TeamCheck and p.Team and player.Team and p.Team==player.Team)) then
+            hideAllESP(d); continue
         end
         local hrpSP,onScreen=camera:WorldToViewportPoint(hrp.Position)
-        if not onScreen then hideAllESP(d); d.history={}; continue end
+        if not onScreen then hideAllESP(d); continue end
 
         local head=char:FindFirstChild("Head")
         local hSP=head and camera:WorldToViewportPoint(head.Position+Vector3.new(0,0.5,0)) or hrpSP
@@ -823,10 +853,10 @@ RunService.RenderStepped:Connect(function()
             for _,l in pairs(d.skelOut) do l.Visible=false end
         end
 
-        -- Trails
+        -- Trails - FIXED: Use while loop to prevent unbounded growth
         if Settings.ESP.Trails then
             local hist=d.history; hist[#hist+1]=hrp.Position
-            if #hist>12 then table.remove(hist,1) end
+            while #hist > 12 do table.remove(hist,1) end
             for i=1,#hist-1 do
                 local p1,v1=camera:WorldToViewportPoint(hist[i])
                 local p2,v2=camera:WorldToViewportPoint(hist[i+1])
@@ -843,7 +873,7 @@ RunService.RenderStepped:Connect(function()
             for _,l in pairs(d.trailOut) do l.Visible=false end
         end
     end
-end)
+end))
 
 --------------------------------------------------------------------------------
 -- MOVEMENT LOGIC
@@ -859,14 +889,27 @@ if rs then
     end)
 end
 
-UserInputService.JumpRequest:Connect(function()
+registerCleanup(UserInputService.JumpRequest:Connect(function()
     if Settings.Movement.InfJump and player.Character then
         local hum = player.Character:FindFirstChildOfClass("Humanoid")
         if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
     end
-end)
+end))
+
+local characterConnections = {}
+local function cleanupCharacter(char)
+    if characterConnections[char] then
+        for _, conn in ipairs(characterConnections[char]) do
+            pcall(function() conn:Disconnect() end)
+        end
+        characterConnections[char] = nil
+    end
+end
 
 local function SetupCharacter(Character)
+    cleanupCharacter(Character)
+    characterConnections[Character] = {}
+    
     local Humanoid = Character:WaitForChild("Humanoid", 3)
     local Head = Character:WaitForChild("Head", 3)
     
@@ -914,17 +957,22 @@ local function SetupCharacter(Character)
                 root.CFrame = root.CFrame * CFrame.new(math.random(-1,1)*0.05, 0, math.random(-1,1)*0.05)
             end
             if Settings.Movement.AntiVoid then
-                if root.Position.Y < -50 then
-                    root.CFrame = root.CFrame + Vector3.new(0, 150, 0)
+                if root.Position.Y < ANTI_VOID_THRESHOLD then
+                    root.CFrame = root.CFrame + Vector3.new(0, ANTI_VOID_TELEPORT_HEIGHT, 0)
                     local platform = Instance.new("Part")
                     platform.Size = Vector3.new(10, 1, 10); platform.Anchored = true; platform.Position = root.Position - Vector3.new(0, 3, 0)
                     platform.Parent = Workspace; game.Debris:AddItem(platform, 3)
                 end
             end
         end
+        cleanupCharacter(Character)
     end)
 end
 
 if player.Character then SetupCharacter(player.Character) end
-player.CharacterAdded:Connect(SetupCharacter)
+registerCleanup(player.CharacterAdded:Connect(SetupCharacter))
 
+-- Cleanup on script stop
+game:BindToClose(function() cleanupAll() end)
+
+print("Karbon Hub v6 loaded successfully with all fixes and optimizations!")
