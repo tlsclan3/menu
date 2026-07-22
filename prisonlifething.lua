@@ -975,4 +975,6 @@ registerCleanup(player.CharacterAdded:Connect(SetupCharacter))
 -- Cleanup on script stop
 game:BindToClose(function() cleanupAll() end)
 
-print("Karbon Hub v6 loaded successfully with all fixes and optimizations!")
+print(" Hub v5 loaded successfully with all fixes and optimizations!")
+"warn script should be ud contact 00.00.__ for and update if gets detected on discord"
+print("done with everything now enjoy your game!")
