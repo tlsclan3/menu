@@ -1,0 +1,27 @@
+Aimbot - Auto-targeting system with FOV circles, wall checks, and smoothing
+ESP (Enemy Seeing Points) - Visual overlays showing players via:
+Box/corner ESP
+Name and distance displays
+Skeleton bone visualization
+Movement tracers and trails
+Teleportation - Multiple TP modes:
+Click-to-teleport
+Follow-teleport to target players
+Keybind system with waypoint path-finding
+Movement Exploits:
+Noclip (pass through walls)
+Infinite jump
+Bunny hopping
+Spinbot rotation
+Anti-void (prevents falling death)
+Utilities:
+Keycard spawning
+Door deletion
+Technical Details:
+Custom UI library with draggable windows, tabs, toggles, sliders, and buttons
+Settings persistence via JSON file (KarbonHub_Settings.json)
+Optimized rendering loop using RenderStepped and Heartbeat
+Killbrick/lava detection and removal to prevent death
+Team checking to avoid friendly fire
+Smooth tweening animations for UI transitions
+The script modifies game physics, rendering, and networking to give players unfair advantages in the Prison Life Roblox game
